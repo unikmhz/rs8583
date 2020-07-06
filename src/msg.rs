@@ -244,9 +244,8 @@ mod tests {
     use super::*;
     use crate::spec::*;
 
-    #[test]
-    fn message_from_bytes() -> Result<(), RS8583Error> {
-        let spec = MessageSpec {
+    fn test_spec() -> MessageSpec {
+        MessageSpec {
             fields: vec![
                 None,
                 Some(FieldSpec {
@@ -280,7 +279,12 @@ mod tests {
                     length: 20,
                 }),
             ],
-        };
+        }
+    }
+
+    #[test]
+    fn message_from_bytes() -> Result<(), RS8583Error> {
+        let spec = test_spec();
         let raw = b"0120\x56\x00\x00\x00\x00\x00\x00\x00111122223333ABCDXY05LLVAR".to_vec();
         let mut bytes = Bytes::from(raw);
         let msg = Message::from_bytes(&spec, &mut bytes)?;
