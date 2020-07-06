@@ -1,3 +1,4 @@
+use crate::error::RS8583Error;
 use bytes::{Buf, Bytes};
 
 pub enum FieldType {
@@ -32,7 +33,7 @@ impl LengthType {
             Self::LLVar => 2,
             Self::LLLVar => 3,
             Self::LLLLVar => 4,
-            _ => 0
+            _ => 0,
         }
     }
 }
@@ -65,14 +66,56 @@ pub struct FieldSpec {
 }
 
 impl FieldSpec {
-    pub fn to_read(&self, cursor: &Bytes) -> usize {
-        match self.length_type {
-            LengthType::BitMap => 0,
-            LengthType::Fixed => self.length,
-            LengthType::LVar => 1, // FIXME
-            LengthType::LLVar => 2, // FIXME
-            LengthType::LLLVar => 3, // FIXME
-            LengthType::LLLLVar => 4, // FIXME
+    fn byte_to_length(&self, len_byte: u8) -> Result<usize, RS8583Error> {
+        // TODO: handle encodings other than ASCII
+        match len_byte {
+            n if n > 0x39 => Err(RS8583Error::parse_error(format!(
+                "Length byte out of range: 0x{:02x}",
+                n
+            ))),
+            n if n < 0x30 => Err(RS8583Error::parse_error(format!(
+                "Length byte out of range: 0x{:02x}",
+                n
+            ))),
+            n => Ok((n - 0x30) as usize),
+        }
+    }
+
+    fn parse_length_prefix(
+        &self,
+        cursor: &mut Bytes,
+        mut len: usize,
+    ) -> Result<usize, RS8583Error> {
+        if len == 0 {
+            return Ok(0);
+        }
+        if cursor.remaining() < len {
+            return Err(RS8583Error::parse_error(format!(
+                "Unable to read length prefix ({} chars needed, {} available)",
+                len,
+                cursor.remaining()
+            )));
+        }
+        let mut sz: usize = 0;
+        while len > 0 {
+            let len_byte = cursor.get_u8();
+            sz += self.byte_to_length(len_byte)? * 10usize.pow(len as u32 - 1);
+            len -= 1;
+        }
+        if sz > self.length {
+            return Err(RS8583Error::parse_error(format!(
+                "Variable length field over max length ({} > {})",
+                sz, self.length
+            )));
+        }
+        Ok(sz)
+    }
+
+    pub fn to_read(&self, cursor: &mut Bytes) -> Result<usize, RS8583Error> {
+        match &self.length_type {
+            LengthType::BitMap => Ok(0),
+            LengthType::Fixed => Ok(self.length),
+            n => self.parse_length_prefix(cursor, n.length_size()),
         }
     }
 }
@@ -80,4 +123,249 @@ impl FieldSpec {
 #[derive(Default)]
 pub struct MessageSpec {
     pub fields: Vec<Option<FieldSpec>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fs_to_read_fixed() {
+        let fs = FieldSpec {
+            name: String::from("TEST"),
+            field_type: FieldType::ANS,
+            length_type: LengthType::Fixed,
+            sensitivity: SensitivityType::Normal,
+            length: 8,
+        };
+
+        let mut bytes = Bytes::from("TEST1234");
+
+        assert_eq!(fs.to_read(&mut bytes).unwrap(), 8);
+    }
+
+    #[test]
+    fn fs_to_read_lvar() {
+        let fs = FieldSpec {
+            name: String::from("TEST"),
+            field_type: FieldType::ANS,
+            length_type: LengthType::LVar,
+            sensitivity: SensitivityType::Normal,
+            length: 8,
+        };
+
+        let mut bytes = Bytes::from("3ABC");
+        assert_eq!(fs.to_read(&mut bytes), Ok(3));
+
+        let mut bytes = Bytes::from("0ABC");
+        assert_eq!(fs.to_read(&mut bytes), Ok(0));
+
+        let mut bytes = Bytes::from("9ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Variable length field over max length (9 > 8)"),
+            })
+        );
+
+        let mut bytes = Bytes::from("");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Unable to read length prefix (1 chars needed, 0 available)"),
+            })
+        );
+
+        let mut bytes = Bytes::from("!ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x21"),
+            })
+        );
+
+        let mut bytes = Bytes::from("ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x41"),
+            })
+        );
+    }
+
+    #[test]
+    fn fs_to_read_llvar() {
+        let fs = FieldSpec {
+            name: String::from("TEST"),
+            field_type: FieldType::ANS,
+            length_type: LengthType::LLVar,
+            sensitivity: SensitivityType::Normal,
+            length: 12,
+        };
+
+        let mut bytes = Bytes::from("03ABC");
+        assert_eq!(fs.to_read(&mut bytes), Ok(3));
+
+        let mut bytes = Bytes::from("11ABCABCABCAB");
+        assert_eq!(fs.to_read(&mut bytes), Ok(11));
+
+        let mut bytes = Bytes::from("00ABC");
+        assert_eq!(fs.to_read(&mut bytes), Ok(0));
+
+        let mut bytes = Bytes::from("13ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Variable length field over max length (13 > 12)"),
+            })
+        );
+
+        let mut bytes = Bytes::from("");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Unable to read length prefix (2 chars needed, 0 available)"),
+            })
+        );
+
+        let mut bytes = Bytes::from("1");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Unable to read length prefix (2 chars needed, 1 available)"),
+            })
+        );
+
+        let mut bytes = Bytes::from("!1ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x21"),
+            })
+        );
+
+        let mut bytes = Bytes::from("1!ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x21"),
+            })
+        );
+
+        let mut bytes = Bytes::from("ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x41"),
+            })
+        );
+
+        let mut bytes = Bytes::from("1ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x41"),
+            })
+        );
+    }
+
+    #[test]
+    fn fs_to_read_lllvar() {
+        let fs = FieldSpec {
+            name: String::from("TEST"),
+            field_type: FieldType::ANS,
+            length_type: LengthType::LLLVar,
+            sensitivity: SensitivityType::Normal,
+            length: 110,
+        };
+
+        let mut bytes = Bytes::from("003ABC");
+        assert_eq!(fs.to_read(&mut bytes), Ok(3));
+
+        let mut bytes = Bytes::from("011ABCABCABCAB");
+        assert_eq!(fs.to_read(&mut bytes), Ok(11));
+
+        let mut bytes = Bytes::from("000ABC");
+        assert_eq!(fs.to_read(&mut bytes), Ok(0));
+
+        let mut bytes = Bytes::from("111ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Variable length field over max length (111 > 110)"),
+            })
+        );
+
+        let mut bytes = Bytes::from("");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Unable to read length prefix (3 chars needed, 0 available)"),
+            })
+        );
+
+        let mut bytes = Bytes::from("1");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Unable to read length prefix (3 chars needed, 1 available)"),
+            })
+        );
+
+        let mut bytes = Bytes::from("11");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Unable to read length prefix (3 chars needed, 2 available)"),
+            })
+        );
+
+        let mut bytes = Bytes::from("!10ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x21"),
+            })
+        );
+
+        let mut bytes = Bytes::from("1!0ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x21"),
+            })
+        );
+
+        let mut bytes = Bytes::from("11!ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x21"),
+            })
+        );
+
+        let mut bytes = Bytes::from("ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x41"),
+            })
+        );
+
+        let mut bytes = Bytes::from("1ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x41"),
+            })
+        );
+
+        let mut bytes = Bytes::from("11ABC");
+        assert_eq!(
+            fs.to_read(&mut bytes),
+            Err(RS8583Error::ParseError {
+                error: String::from("Length byte out of range: 0x41"),
+            })
+        );
+    }
 }
