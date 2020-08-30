@@ -1,5 +1,22 @@
+use bytes::Bytes;
+
 #[derive(Clone, Debug)]
 pub struct Field {
-    pub length: usize,
-    pub data: Vec<u8>,
+    data: Bytes,
+}
+
+impl Field {
+    pub fn from_bytes(data: Bytes) -> Self {
+        Field {
+            data,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        self.data.as_ref()
+    }
 }

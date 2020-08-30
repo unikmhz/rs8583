@@ -1,5 +1,7 @@
 use crate::error::RS8583Error;
-use bytes::{Buf, Bytes};
+use bytes::{Buf, Bytes, BytesMut};
+
+use crate::field::Field;
 
 pub enum FieldType {
     A,
@@ -116,6 +118,32 @@ impl FieldSpec {
             LengthType::BitMap => Ok(0),
             LengthType::Fixed => Ok(self.length),
             n => self.parse_length_prefix(cursor, n.length_size()),
+        }
+    }
+
+    fn serialize_prefix(&self, buf: &mut BytesMut, prefix_len: usize, data_len: usize) -> Result<(), RS8583Error> {
+        // TODO: check max data_len
+        let prefix = format!("{0:01$}", data_len, prefix_len);
+        buf.extend_from_slice(prefix.as_bytes());
+        Ok(())
+    }
+
+    pub fn serialize_field(&self, buf: &mut BytesMut, field: &Field) -> Result<(), RS8583Error> {
+        match &self.length_type {
+            LengthType::BitMap => Ok(()),
+            LengthType::Fixed => {
+                if self.length == field.len() {
+                    buf.extend_from_slice(field.as_slice());
+                    Ok(())
+                } else {
+                    Err(RS8583Error::parse_error("Invalid field length"))
+                }
+            },
+            n => {
+                self.serialize_prefix(buf, n.length_size(), field.len())?;
+                buf.extend_from_slice(field.as_slice());
+                Ok(())
+            }
         }
     }
 }

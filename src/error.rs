@@ -1,8 +1,8 @@
-use failure::Fail;
+use thiserror::Error;
 
-#[derive(Debug, Fail, PartialEq)]
+#[derive(Error, Debug, PartialEq)]
 pub enum RS8583Error {
-    #[fail(display = "ISO8583 parse error: {}", error)]
+    #[error("ISO8583 parse error: {error}")]
     ParseError { error: String },
 }
 

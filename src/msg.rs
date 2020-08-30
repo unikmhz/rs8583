@@ -1,7 +1,6 @@
-use bitmaps::Bitmap;
-use bytes::{Buf, Bytes};
-use typenum::{U192, U64};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
+use crate::bitmap::BitMap;
 use crate::error::RS8583Error;
 use crate::field::Field;
 use crate::spec::MessageSpec;
@@ -10,16 +9,18 @@ pub struct MTI([u8; 4]);
 
 impl Default for MTI {
     fn default() -> Self {
-        MTI(b"0000".to_owned())
+        MTI([0x30, 0x30, 0x30, 0x30])
     }
 }
 
 impl MTI {
-    fn from_cursor(cursor: &mut Bytes) -> MTI {
+    fn from_cursor(cursor: &mut Bytes) -> Result<MTI, RS8583Error> {
+        if cursor.remaining() < 4 {
+            return Err(RS8583Error::parse_error("Truncated MTI"));
+        }
         let mut mti = MTI::default();
-
         cursor.copy_to_slice(&mut mti.0);
-        mti
+        Ok(mti)
     }
 
     pub fn version_byte(&self) -> u8 {
@@ -167,16 +168,16 @@ impl MTI {
 
 pub struct Message<'spec> {
     mti: MTI,
-    bitmap: Bitmap<U192>,
+    bitmap: BitMap,
     spec: &'spec MessageSpec,
     fields: Vec<Option<Field>>,
 }
 
 impl<'spec> Message<'spec> {
-    pub fn from_bytes(spec: &'spec MessageSpec, raw: &mut Bytes) -> Result<Self, RS8583Error> {
-        let mti = Self::parse_mti(raw);
-        let bitmap = Self::parse_bitmap(raw);
-        let fields = Self::parse_fields(spec, &bitmap, raw)?;
+    pub fn from_bytes(spec: &'spec MessageSpec, mut data: Bytes) -> Result<Self, RS8583Error> {
+        let mti = MTI::from_cursor(&mut data)?;
+        let bitmap = BitMap::from_cursor(&mut data)?;
+        let fields = Self::parse_fields(spec, &bitmap, &mut data)?;
         Ok(Message {
             mti,
             bitmap,
@@ -185,38 +186,14 @@ impl<'spec> Message<'spec> {
         })
     }
 
-    fn parse_mti(cursor: &mut Bytes) -> MTI {
-        MTI::from_cursor(cursor)
-    }
-
-    fn parse_bitmap(cursor: &mut Bytes) -> Bitmap<U192> {
-        let mut bm: Bitmap<U192> = Bitmap::new();
-        let mut num_chunks = 0;
-
-        // TODO: efficient copy
-        loop {
-            let chunk: Bitmap<U64> = Bitmap::from_value(cursor.get_u64_le());
-
-            for bit in chunk.into_iter() {
-                bm.set((num_chunks * 64) + bit, true);
-            }
-            num_chunks += 1;
-
-            if !chunk.get(0) {
-                break;
-            }
-        }
-        bm
-    }
-
     fn parse_fields(
         spec: &'spec MessageSpec,
-        bitmap: &Bitmap<U192>,
+        bitmap: &BitMap,
         cursor: &mut Bytes,
     ) -> Result<Vec<Option<Field>>, RS8583Error> {
-        let mut fields = vec![None; 192];
+        let mut fields = vec![None; 128];
 
-        for idx in bitmap {
+        for idx in bitmap.iter_set() {
             let field_spec = spec.fields.get(idx).unwrap();
             if field_spec.is_none() {
                 // WARN
@@ -224,10 +201,11 @@ impl<'spec> Message<'spec> {
             }
             let field_spec = field_spec.as_ref().unwrap();
             let to_read = field_spec.to_read(cursor)?;
-            fields[idx] = Some(Field {
-                data: Vec::from(&cursor[..to_read]),
-                length: to_read,
-            });
+            if cursor.remaining() < to_read {
+                // TODO: better error
+                return Err(RS8583Error::parse_error("Truncated field"));
+            }
+            fields[idx] = Some(Field::from_bytes(cursor.slice(..to_read)));
             cursor.advance(to_read);
         }
 
@@ -236,6 +214,38 @@ impl<'spec> Message<'spec> {
 
     pub fn mti(&self) -> &MTI {
         return &self.mti;
+    }
+
+    pub fn field(&self, id: usize) -> Option<&Field> {
+        if id >= self.fields.len() {
+            None
+        } else {
+            self.fields[id].as_ref()
+        }
+    }
+
+    pub fn serialize(&self) -> Result<BytesMut, RS8583Error> {
+        // TODO: compute capacity
+        let mut buf = BytesMut::with_capacity(32);
+
+        // MTI
+        buf.put(self.mti.0.as_ref());
+        // BITMAP
+        self.bitmap.serialize(&mut buf);
+        // FIELDS
+        for idx in self.bitmap.iter_set() {
+            if let Some(field) = self.field(idx) {
+                let field_spec = self.spec.fields.get(idx).unwrap();
+                if field_spec.is_none() {
+                    // WARN
+                    continue;
+                }
+                let field_spec = field_spec.as_ref().unwrap();
+                field_spec.serialize_field(&mut buf, field)?;
+            }
+        }
+
+        Ok(buf)
     }
 }
 
@@ -286,8 +296,8 @@ mod tests {
     fn message_from_bytes() -> Result<(), RS8583Error> {
         let spec = test_spec();
         let raw = b"0120\x56\x00\x00\x00\x00\x00\x00\x00111122223333ABCDXY05LLVAR".to_vec();
-        let mut bytes = Bytes::from(raw);
-        let msg = Message::from_bytes(&spec, &mut bytes)?;
+        let orig_raw = raw.clone();
+        let msg = Message::from_bytes(&spec, Bytes::from(raw))?;
 
         let mti = msg.mti();
         assert_eq!(&mti.0, b"0120");
@@ -298,40 +308,44 @@ mod tests {
         assert!(mti.is_from_acquirer());
         assert!(!mti.is_repeat());
 
-        assert_eq!(msg.bitmap.get(0), false);
-        assert_eq!(msg.bitmap.get(1), true);
-        assert_eq!(msg.bitmap.get(2), true);
-        assert_eq!(msg.bitmap.get(3), false);
-        assert_eq!(msg.bitmap.get(4), true);
-        assert_eq!(msg.bitmap.get(5), false);
-        assert_eq!(msg.bitmap.get(6), true);
-        assert_eq!(msg.bitmap.get(7), false);
-        assert_eq!(msg.bitmap.get(63), false);
+        assert_eq!(msg.bitmap.test(0), false);
+        assert_eq!(msg.bitmap.test(1), true);
+        assert_eq!(msg.bitmap.test(2), true);
+        assert_eq!(msg.bitmap.test(3), false);
+        assert_eq!(msg.bitmap.test(4), true);
+        assert_eq!(msg.bitmap.test(5), false);
+        assert_eq!(msg.bitmap.test(6), true);
+        assert_eq!(msg.bitmap.test(7), false);
+        assert_eq!(msg.bitmap.test(63), false);
 
         assert!(msg.fields[0].is_none());
         assert!(msg.fields[1].is_some());
 
-        let fld = msg.fields[1].as_ref().unwrap();
-        assert_eq!(fld.data, b"111122223333");
-        assert_eq!(fld.length, 12);
+        let fld = msg.field(1).unwrap();
+        assert_eq!(fld.as_slice(), b"111122223333");
+        assert_eq!(fld.len(), 12);
 
-        let fld = msg.fields[2].as_ref().unwrap();
-        assert_eq!(fld.data, b"ABCD");
-        assert_eq!(fld.length, 4);
+        let fld = msg.field(2).unwrap();
+        assert_eq!(fld.as_slice(), b"ABCD");
+        assert_eq!(fld.len(), 4);
 
-        let fld = msg.fields[3].as_ref();
+        let fld = msg.field(3);
         assert!(fld.is_none());
 
-        let fld = msg.fields[4].as_ref().unwrap();
-        assert_eq!(fld.data, b"XY");
-        assert_eq!(fld.length, 2);
+        let fld = msg.field(4).unwrap();
+        assert_eq!(fld.as_slice(), b"XY");
+        assert_eq!(fld.len(), 2);
 
-        let fld = msg.fields[5].as_ref();
+        let fld = msg.field(5);
         assert!(fld.is_none());
 
-        let fld = msg.fields[6].as_ref().unwrap();
-        assert_eq!(fld.data, b"LLVAR");
-        assert_eq!(fld.length, 5);
+        let fld = msg.field(6).unwrap();
+        assert_eq!(fld.as_slice(), b"LLVAR");
+        assert_eq!(fld.len(), 5);
+
+        let serialized = msg.serialize().unwrap();
+        assert_eq!(serialized.as_ref(), &orig_raw[..]);
+        assert_eq!(serialized.as_ref(), &orig_raw[..]);
 
         Ok(())
     }
