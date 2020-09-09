@@ -58,7 +58,9 @@ impl BitMap {
             self.resize_for_idx(idx);
         }
         self.inner.set(idx, true);
-        self.inner.set(idx - idx % 64, true);
+        if idx > 63 {
+            self.inner.set(idx - 64 - idx % 64, true);
+        }
     }
 
     pub fn clear(&mut self, idx: usize) {

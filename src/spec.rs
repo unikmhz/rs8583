@@ -1,5 +1,6 @@
 use crate::error::RS8583Error;
 use bytes::{Buf, Bytes, BytesMut};
+use std::cmp::min;
 
 use crate::field::Field;
 
@@ -68,8 +69,33 @@ pub struct FieldSpec {
 }
 
 impl FieldSpec {
+    pub fn min_value_size(&self) -> usize {
+        // TODO: support codecs for LL
+        match self.length_type {
+            LengthType::Fixed => self.length,
+            LengthType::LVar => 1,
+            LengthType::LLVar => 1,
+            LengthType::LLLVar => 1,
+            LengthType::LLLLVar => 1,
+            _ => 0,
+        }
+    }
+
+    pub fn max_value_size(&self) -> usize {
+        // TODO: support codecs for LL
+        match self.length_type {
+            LengthType::Fixed => self.length,
+            LengthType::LVar => min(self.length, 9),
+            LengthType::LLVar => min(self.length, 99),
+            LengthType::LLLVar => min(self.length, 999),
+            LengthType::LLLLVar => min(self.length, 9999),
+            _ => 0,
+        }
+    }
+
+
     fn byte_to_length(&self, len_byte: u8) -> Result<usize, RS8583Error> {
-        // TODO: handle encodings other than ASCII
+        // TODO: handle encodings other than ASCII (via codec)
         match len_byte {
             n if n > 0x39 => Err(RS8583Error::parse_error(format!(
                 "Length byte out of range: 0x{:02x}",

@@ -224,6 +224,21 @@ impl<'spec> Message<'spec> {
         }
     }
 
+    pub fn set_field<T>(&mut self, idx: usize, value: T)
+    where
+        T: Into<Bytes>,
+    {
+        // TODO: check max idx
+        // TODO: check value length (and possibly format)
+        self.fields[idx] = Some(Field::from_bytes(value.into()));
+        self.bitmap.set(idx);
+    }
+
+    pub fn clear_field(&mut self, idx: usize) {
+        self.fields[idx] = None;
+        self.bitmap.clear(idx);
+    }
+
     pub fn serialize(&self) -> Result<BytesMut, RS8583Error> {
         // TODO: compute capacity
         let mut buf = BytesMut::with_capacity(32);
@@ -288,6 +303,13 @@ mod tests {
                     sensitivity: SensitivityType::Normal,
                     length: 20,
                 }),
+                Some(FieldSpec {
+                    name: String::from("TEST FIELD 7"),
+                    field_type: FieldType::B,
+                    length_type: LengthType::Fixed,
+                    sensitivity: SensitivityType::Normal,
+                    length: 4,
+                }),
             ],
         }
     }
@@ -297,7 +319,7 @@ mod tests {
         let spec = test_spec();
         let raw = b"0120\x56\x00\x00\x00\x00\x00\x00\x00111122223333ABCDXY05LLVAR".to_vec();
         let orig_raw = raw.clone();
-        let msg = Message::from_bytes(&spec, Bytes::from(raw))?;
+        let mut msg = Message::from_bytes(&spec, Bytes::from(raw))?;
 
         let mti = msg.mti();
         assert_eq!(&mti.0, b"0120");
@@ -343,9 +365,22 @@ mod tests {
         assert_eq!(fld.as_slice(), b"LLVAR");
         assert_eq!(fld.len(), 5);
 
+        let fld = msg.field(7);
+        assert!(fld.is_none());
+
         let serialized = msg.serialize().unwrap();
         assert_eq!(serialized.as_ref(), &orig_raw[..]);
         assert_eq!(serialized.as_ref(), &orig_raw[..]);
+
+        msg.set_field(7, "1234");
+
+        let fld = msg.field(7).unwrap();
+        assert_eq!(fld.as_slice(), b"1234");
+        assert_eq!(fld.len(), 4);
+        assert_eq!(msg.bitmap.test(7), true);
+
+        let serialized = msg.serialize().unwrap();
+        assert_eq!(serialized, Bytes::from(b"0120\xd6\x00\x00\x00\x00\x00\x00\x00111122223333ABCDXY05LLVAR1234".to_vec()));
 
         Ok(())
     }
