@@ -14,6 +14,10 @@ impl Field {
         self.data.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
     pub fn as_slice(&self) -> &[u8] {
         self.data.as_ref()
     }

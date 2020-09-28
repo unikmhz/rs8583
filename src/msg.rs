@@ -219,7 +219,7 @@ impl<'spec> Message<'spec> {
     }
 
     pub fn mti(&self) -> &MTI {
-        return &self.mti;
+        &self.mti
     }
 
     pub fn field(&self, id: usize) -> Option<&Field> {
