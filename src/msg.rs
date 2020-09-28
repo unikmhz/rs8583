@@ -1,6 +1,7 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::bitmap::BitMap;
+use crate::codec::Codec;
 use crate::error::RS8583Error;
 use crate::field::Field;
 use crate::spec::MessageSpec;
@@ -174,10 +175,10 @@ pub struct Message<'spec> {
 }
 
 impl<'spec> Message<'spec> {
-    pub fn from_bytes(spec: &'spec MessageSpec, mut data: Bytes) -> Result<Self, RS8583Error> {
+    pub fn from_bytes(spec: &'spec MessageSpec, codec: &Codec, mut data: Bytes) -> Result<Self, RS8583Error> {
         let mti = MTI::from_cursor(&mut data)?;
         let bitmap = BitMap::from_cursor(&mut data)?;
-        let fields = Self::parse_fields(spec, &bitmap, &mut data)?;
+        let fields = Self::parse_fields(spec, codec, &bitmap, &mut data)?;
         Ok(Message {
             mti,
             bitmap,
@@ -188,6 +189,7 @@ impl<'spec> Message<'spec> {
 
     fn parse_fields(
         spec: &'spec MessageSpec,
+        codec: &Codec,
         bitmap: &BitMap,
         cursor: &mut Bytes,
     ) -> Result<Vec<Option<Field>>, RS8583Error> {
@@ -200,7 +202,7 @@ impl<'spec> Message<'spec> {
                 continue;
             }
             let field_spec = field_spec.as_ref().unwrap();
-            let to_read = field_spec.to_read(cursor)?;
+            let to_read = field_spec.to_read(codec, cursor)?;
             if cursor.remaining() < to_read {
                 // TODO: better error
                 return Err(RS8583Error::parse_error("Truncated field"));
@@ -239,7 +241,7 @@ impl<'spec> Message<'spec> {
         self.bitmap.clear(idx);
     }
 
-    pub fn serialize(&self) -> Result<BytesMut, RS8583Error> {
+    pub fn serialize(&self, codec: &Codec) -> Result<BytesMut, RS8583Error> {
         // TODO: compute capacity
         let mut buf = BytesMut::with_capacity(32);
 
@@ -256,7 +258,7 @@ impl<'spec> Message<'spec> {
                     continue;
                 }
                 let field_spec = field_spec.as_ref().unwrap();
-                field_spec.serialize_field(&mut buf, field)?;
+                field_spec.serialize_field(codec, &mut buf, field)?;
             }
         }
 
@@ -316,10 +318,11 @@ mod tests {
 
     #[test]
     fn message_from_bytes() -> Result<(), RS8583Error> {
+        let codec = Codec::default();
         let spec = test_spec();
         let raw = b"0120\x56\x00\x00\x00\x00\x00\x00\x00111122223333ABCDXY05LLVAR".to_vec();
         let orig_raw = raw.clone();
-        let mut msg = Message::from_bytes(&spec, Bytes::from(raw))?;
+        let mut msg = Message::from_bytes(&spec, &codec, Bytes::from(raw))?;
 
         let mti = msg.mti();
         assert_eq!(&mti.0, b"0120");
@@ -368,7 +371,7 @@ mod tests {
         let fld = msg.field(7);
         assert!(fld.is_none());
 
-        let serialized = msg.serialize().unwrap();
+        let serialized = msg.serialize(&codec).unwrap();
         assert_eq!(serialized.as_ref(), &orig_raw[..]);
         assert_eq!(serialized.as_ref(), &orig_raw[..]);
 
@@ -379,7 +382,7 @@ mod tests {
         assert_eq!(fld.len(), 4);
         assert_eq!(msg.bitmap.test(7), true);
 
-        let serialized = msg.serialize().unwrap();
+        let serialized = msg.serialize(&codec).unwrap();
         assert_eq!(
             serialized,
             Bytes::from(
