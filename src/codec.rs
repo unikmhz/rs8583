@@ -39,10 +39,10 @@ impl Default for VariableLengthFormat {
 
 #[derive(Default)]
 pub struct Codec {
-    length_encoding: Encoding,
-    data_encoding: Encoding,
-    framing: Framing,
-    ll_format: VariableLengthFormat,
+    pub length_encoding: Encoding,
+    pub data_encoding: Encoding,
+    pub framing: Framing,
+    pub ll_format: VariableLengthFormat,
 }
 
 impl Codec {
