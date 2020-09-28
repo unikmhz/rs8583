@@ -380,7 +380,12 @@ mod tests {
         assert_eq!(msg.bitmap.test(7), true);
 
         let serialized = msg.serialize().unwrap();
-        assert_eq!(serialized, Bytes::from(b"0120\xd6\x00\x00\x00\x00\x00\x00\x00111122223333ABCDXY05LLVAR1234".to_vec()));
+        assert_eq!(
+            serialized,
+            Bytes::from(
+                b"0120\xd6\x00\x00\x00\x00\x00\x00\x00111122223333ABCDXY05LLVAR1234".to_vec()
+            )
+        );
 
         Ok(())
     }

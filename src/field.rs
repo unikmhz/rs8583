@@ -7,9 +7,7 @@ pub struct Field {
 
 impl Field {
     pub fn from_bytes(data: Bytes) -> Self {
-        Field {
-            data,
-        }
+        Field { data }
     }
 
     pub fn len(&self) -> usize {

@@ -28,9 +28,7 @@ impl BitMap {
             }
         }
 
-        Ok(BitMap {
-            inner,
-        })
+        Ok(BitMap { inner })
     }
 
     pub fn serialize(&self, buf: &mut BytesMut) {
@@ -71,17 +69,14 @@ impl BitMap {
     }
 
     pub fn iter_set(&self) -> impl Iterator<Item = usize> + '_ {
-        self.inner
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, value)| {
-                if idx % 64 == 0 {
-                    None
-                } else if *value {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
+        self.inner.iter().enumerate().filter_map(|(idx, value)| {
+            if idx % 64 == 0 {
+                None
+            } else if *value {
+                Some(idx)
+            } else {
+                None
+            }
+        })
     }
 }

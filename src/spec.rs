@@ -93,7 +93,6 @@ impl FieldSpec {
         }
     }
 
-
     fn byte_to_length(&self, len_byte: u8) -> Result<usize, RS8583Error> {
         // TODO: handle encodings other than ASCII (via codec)
         match len_byte {
@@ -147,7 +146,12 @@ impl FieldSpec {
         }
     }
 
-    fn serialize_prefix(&self, buf: &mut BytesMut, prefix_len: usize, data_len: usize) -> Result<(), RS8583Error> {
+    fn serialize_prefix(
+        &self,
+        buf: &mut BytesMut,
+        prefix_len: usize,
+        data_len: usize,
+    ) -> Result<(), RS8583Error> {
         // TODO: check max data_len
         let prefix = format!("{0:01$}", data_len, prefix_len);
         buf.extend_from_slice(prefix.as_bytes());
@@ -164,7 +168,7 @@ impl FieldSpec {
                 } else {
                     Err(RS8583Error::parse_error("Invalid field length"))
                 }
-            },
+            }
             n => {
                 self.serialize_prefix(buf, n.length_size(), field.len())?;
                 buf.extend_from_slice(field.as_slice());
