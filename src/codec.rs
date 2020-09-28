@@ -74,7 +74,12 @@ impl Codec {
         }
     }
 
-    pub fn serialize_prefix(&self, buf: &mut BytesMut, prefix_len: usize, data_len: usize) -> Result<(), RS8583Error> {
+    pub fn serialize_prefix(
+        &self,
+        buf: &mut BytesMut,
+        prefix_len: usize,
+        data_len: usize,
+    ) -> Result<(), RS8583Error> {
         match self.ll_format {
             VariableLengthFormat::Byte => {
                 if data_len > (std::u8::MAX as usize) {

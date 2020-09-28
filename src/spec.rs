@@ -133,7 +133,12 @@ impl FieldSpec {
         }
     }
 
-    pub fn serialize_field(&self, codec: &Codec, buf: &mut BytesMut, field: &Field) -> Result<(), RS8583Error> {
+    pub fn serialize_field(
+        &self,
+        codec: &Codec,
+        buf: &mut BytesMut,
+        field: &Field,
+    ) -> Result<(), RS8583Error> {
         match &self.length_type {
             LengthType::BitMap => Ok(()),
             LengthType::Fixed => {

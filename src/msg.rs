@@ -175,7 +175,11 @@ pub struct Message<'spec> {
 }
 
 impl<'spec> Message<'spec> {
-    pub fn from_bytes(spec: &'spec MessageSpec, codec: &Codec, mut data: Bytes) -> Result<Self, RS8583Error> {
+    pub fn from_bytes(
+        spec: &'spec MessageSpec,
+        codec: &Codec,
+        mut data: Bytes,
+    ) -> Result<Self, RS8583Error> {
         let mti = MTI::from_cursor(&mut data)?;
         let bitmap = BitMap::from_cursor(&mut data)?;
         let fields = Self::parse_fields(spec, codec, &bitmap, &mut data)?;
